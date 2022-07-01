@@ -393,21 +393,16 @@ static void *ion_dma_buf_vmap(struct dma_buf *dmabuf)
 static void ion_dma_buf_vunmap(struct dma_buf *dmabuf, void *vaddr)
 {
 	struct ion_buffer *buffer = dmabuf->priv;
+	void *vaddr;
 
-	if (buffer->heap->ops->map_kernel) {
-		mutex_lock(&buffer->lock);
-		ion_buffer_kmap_put(buffer);
-		mutex_unlock(&buffer->lock);
+	if (!buffer->heap->ops->map_kernel) {
+		pr_err("%s: map kernel is not implemented by this heap.\n",
+		       __func__);
+		return ERR_PTR(-ENOTTY);
 	}
-}
-
-static void *ion_dma_buf_kmap(struct dma_buf *dmabuf, unsigned long offset)
-{
-	/*
-	 * TODO: Once clients remove their hacks where they assume kmap(ed)
-	 * addresses are virtually contiguous implement this properly
-	 */
-	void *vaddr = ion_dma_buf_vmap(dmabuf);
+	mutex_lock(&buffer->lock);
+	vaddr = ion_buffer_kmap_get(buffer);
+	mutex_unlock(&buffer->lock);
 
 	if (IS_ERR(vaddr))
 		return vaddr;
@@ -418,51 +413,13 @@ static void *ion_dma_buf_kmap(struct dma_buf *dmabuf, unsigned long offset)
 static void ion_dma_buf_kunmap(struct dma_buf *dmabuf, unsigned long offset,
 			       void *ptr)
 {
-	/*
-	 * TODO: Once clients remove their hacks where they assume kmap(ed)
-	 * addresses are virtually contiguous implement this properly
-	 */
-	ion_dma_buf_vunmap(dmabuf, ptr);
-}
+	struct ion_buffer *buffer = dmabuf->priv;
 
-static int ion_sgl_sync_range(struct device *dev, struct scatterlist *sgl,
-			      unsigned int nents, unsigned int offset,
-			      unsigned int length,
-			      enum dma_data_direction dir, bool for_cpu)
-{
-	int i;
-	struct scatterlist *sg;
-	unsigned int len = 0;
-	dma_addr_t sg_dma_addr;
-
-	for_each_sg(sgl, sg, nents, i) {
-		unsigned int sg_offset, sg_left, size = 0;
-
-		sg_dma_addr = sg_dma_address(sg);
-
-		len += sg->length;
-		if (len <= offset)
-			continue;
-
-		sg_left = len - offset;
-		sg_offset = sg->length - sg_left;
-
-		size = (length < sg_left) ? length : sg_left;
-		if (for_cpu)
-			dma_sync_single_range_for_cpu(dev, sg_dma_addr,
-						      sg_offset, size, dir);
-		else
-			dma_sync_single_range_for_device(dev, sg_dma_addr,
-							 sg_offset, size, dir);
-
-		offset += size;
-		length -= size;
-
-		if (length == 0)
-			break;
+	if (buffer->heap->ops->map_kernel) {
+		mutex_lock(&buffer->lock);
+		ion_buffer_kmap_put(buffer);
+		mutex_unlock(&buffer->lock);
 	}
-
-	return 0;
 }
 
 static int ion_dma_buf_begin_cpu_access(struct dma_buf *dmabuf,
@@ -470,21 +427,6 @@ static int ion_dma_buf_begin_cpu_access(struct dma_buf *dmabuf,
 {
 	struct ion_buffer *buffer = dmabuf->priv;
 	struct ion_dma_buf_attachment *a;
-	void *vaddr;
-	int ret = 0;
-
-	/*
-	 * TODO: Move this elsewhere because we don't always need a vaddr
-	 */
-	if (buffer->heap->ops->map_kernel) {
-		mutex_lock(&buffer->lock);
-		vaddr = ion_buffer_kmap_get(buffer);
-		if (IS_ERR(vaddr)) {
-			ret = PTR_ERR(vaddr);
-			goto unlock;
-		}
-		mutex_unlock(&buffer->lock);
-	}
 
 	if (direction == DMA_TO_DEVICE)
 		return 0;
@@ -513,10 +455,9 @@ static int ion_dma_buf_begin_cpu_access(struct dma_buf *dmabuf,
 		dma_sync_sg_for_cpu(a->dev, a->table->sgl, a->table->nents,
 				    direction);
 	}
-unlock:
 	mutex_unlock(&buffer->lock);
 
-	return ret;
+	return 0;
 }
 
 static int ion_dma_buf_end_cpu_access(struct dma_buf *dmabuf,
@@ -524,24 +465,6 @@ static int ion_dma_buf_end_cpu_access(struct dma_buf *dmabuf,
 {
 	struct ion_buffer *buffer = dmabuf->priv;
 	struct ion_dma_buf_attachment *a;
-
-	if (buffer->heap->ops->map_kernel) {
-		mutex_lock(&buffer->lock);
-		ion_buffer_kmap_put(buffer);
-		mutex_unlock(&buffer->lock);
-	}
-
-	if (buffer->size >= SZ_1M) {
-		if (direction == DMA_FROM_DEVICE) {
-			flush_cache_all();
-			goto exit;
-		} else {
-#ifdef CONFIG_ARM64
-			__flush_dcache_all();
-			goto exit;
-#endif
-		}
-	}
 
 	mutex_lock(&buffer->lock);
 	if (IS_ENABLED(CONFIG_ION_FORCE_DMA_SYNC)) {
