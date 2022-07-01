@@ -17,6 +17,7 @@
  */
 
 #include <linux/arm-smccc.h>
+#include <linux/psci.h>
 #include <linux/types.h>
 #include <linux/cpu.h>
 #include <asm/cpu.h>
