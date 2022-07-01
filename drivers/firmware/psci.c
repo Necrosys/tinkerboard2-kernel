@@ -66,7 +66,7 @@ struct psci_operations psci_ops = {
 
 enum arm_smccc_conduit arm_smccc_1_1_get_conduit(void)
 {
-	if (psci_ops.smccc_version < ARM_SMCCC_VERSION_1_1)
+	if (psci_ops.smccc_version < SMCCC_VERSION_1_1)
 		return SMCCC_CONDUIT_NONE;
 
 	switch (psci_ops.conduit) {

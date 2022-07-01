@@ -1359,7 +1359,6 @@ static int rtw_wx_set_scan(struct net_device *dev, struct iw_request_info *a,
 
 					sec_len = *(pos++); len-= 1;
 
-					if (sec_len>0 && sec_len<=len) {
 					if (sec_len > 0 &&
 					    sec_len <= len &&
 					    sec_len <= 32) {
