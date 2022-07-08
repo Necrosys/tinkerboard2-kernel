@@ -4631,6 +4631,7 @@ static int vop_bind(struct device *dev, struct device *master, void *data)
 		dev_warn(vop->dev, "failed to get vop register byname\n");
 		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	}
+
 	vop->regs = devm_ioremap_resource(dev, res);
 	if (IS_ERR(vop->regs))
 		return PTR_ERR(vop->regs);
