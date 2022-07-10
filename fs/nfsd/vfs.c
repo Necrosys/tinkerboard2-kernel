@@ -693,7 +693,7 @@ nfsd_access(struct svc_rqst *rqstp, struct svc_fh *fhp, u32 *access, u32 *suppor
 }
 #endif /* CONFIG_NFSD_V3 */
 
-int nfsd_open_break_lease(struct inode *inode, int access)
+static int nfsd_open_break_lease(struct inode *inode, int access)
 {
 	unsigned int mode;
 
@@ -709,8 +709,8 @@ int nfsd_open_break_lease(struct inode *inode, int access)
  * and additional flags.
  * N.B. After this call fhp needs an fh_put
  */
-static __be32
-__nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type,
+__be32
+nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type,
 			int may_flags, struct file **filp)
 {
 	struct path	path;
@@ -719,6 +719,25 @@ __nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type,
 	int		flags = O_RDONLY|O_LARGEFILE;
 	__be32		err;
 	int		host_err = 0;
+
+	validate_process_creds();
+
+	/*
+	 * If we get here, then the client has already done an "open",
+	 * and (hopefully) checked permission - so allow OWNER_OVERRIDE
+	 * in case a chmod has now revoked permission.
+	 *
+	 * Arguably we should also allow the owner override for
+	 * directories, but we never have and it doesn't seem to have
+	 * caused anyone a problem.  If we were to change this, note
+	 * also that our filldir callbacks would need a variant of
+	 * lookup_one_len that doesn't check permissions.
+	 */
+	if (type == S_IFREG)
+		may_flags |= NFSD_MAY_OWNER_OVERRIDE;
+	err = fh_verify(rqstp, fhp, type, may_flags);
+	if (err)
+		goto out;
 
 	path.mnt = fhp->fh_export->ex_path.mnt;
 	path.dentry = fhp->fh_dentry;
@@ -773,49 +792,9 @@ __nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type,
 out_nfserr:
 	err = nfserrno(host_err);
 out:
-	return err;
-}
-
-__be32
-nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type,
-		int may_flags, struct file **filp)
-{
-	__be32 err;
-
-	validate_process_creds();
-	/*
-	 * If we get here, then the client has already done an "open",
-	 * and (hopefully) checked permission - so allow OWNER_OVERRIDE
-	 * in case a chmod has now revoked permission.
-	 *
-	 * Arguably we should also allow the owner override for
-	 * directories, but we never have and it doesn't seem to have
-	 * caused anyone a problem.  If we were to change this, note
-	 * also that our filldir callbacks would need a variant of
-	 * lookup_one_len that doesn't check permissions.
-	 */
-	if (type == S_IFREG)
-		may_flags |= NFSD_MAY_OWNER_OVERRIDE;
-	err = fh_verify(rqstp, fhp, type, may_flags);
-	if (!err)
-		err = __nfsd_open(rqstp, fhp, type, may_flags, filp);
 	validate_process_creds();
 	return err;
 }
-
-__be32
-nfsd_open_verified(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type,
-		int may_flags, struct file **filp)
-{
-	__be32 err;
-
-	validate_process_creds();
-	err = __nfsd_open(rqstp, fhp, type, may_flags, filp);
-	validate_process_creds();
-	return err;
-}
-
-
 
 struct raparms *
 nfsd_init_raparms(struct file *file)
@@ -1881,9 +1860,8 @@ static int nfsd_buffered_filldir(struct dir_context *ctx, const char *name,
 	return 0;
 }
 
-static __be32 nfsd_buffered_readdir(struct file *file, struct svc_fh *fhp,
-				    nfsd_filldir_t func, struct readdir_cd *cdp,
-				    loff_t *offsetp)
+static __be32 nfsd_buffered_readdir(struct file *file, nfsd_filldir_t func,
+				    struct readdir_cd *cdp, loff_t *offsetp)
 {
 	struct buffered_dirent *de;
 	int host_err;
@@ -1928,8 +1906,6 @@ static __be32 nfsd_buffered_readdir(struct file *file, struct svc_fh *fhp,
 
 			if (cdp->err != nfs_ok)
 				break;
-
-			trace_nfsd_dirent(fhp, de->ino, de->name, de->namlen);
 
 			reclen = ALIGN(sizeof(*de) + de->namlen,
 				       sizeof(u64));
@@ -1978,7 +1954,7 @@ nfsd_readdir(struct svc_rqst *rqstp, struct svc_fh *fhp, loff_t *offsetp,
 		goto out_close;
 	}
 
-	err = nfsd_buffered_readdir(file, fhp, func, cdp, offsetp);
+	err = nfsd_buffered_readdir(file, func, cdp, offsetp);
 
 	if (err == nfserr_eof || err == nfserr_toosmall)
 		err = nfs_ok; /* can still be found in ->err */
